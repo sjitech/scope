@@ -8,17 +8,48 @@ import (
 
 // TaskFamily is the key that stores the task family of an ECS Task
 const (
+	ECSCluster = "ecs_cluster"
 	TaskFamily = "ecs_task_family"
+	TaskVersion = "ecs_task_version"
 )
 
-type taskInfo struct {
+var (
+	taskMetadata = report.MetadataTemplates{
+		ECSCluster: {ID: ECSCluster, Label: "Cluster", From: report.FromLatest, Priority: 0}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 1}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 2}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 3}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 4}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 5}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 6}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 7}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 8}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 9}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 10}
+	}
+	serviceMetadata = report.MetadataTemplates{
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 0}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 1}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 2}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 3}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 4}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 5}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 6}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 7}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 8}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 9}
+		AThing: {ID: AThing, Label: "A Thing", From: report.FromLatest, Priority: 10}
+	}
+)
+
+type taskLabelInfo struct {
 	containerIDs []string
 	family       string
 }
 
 // return map from cluster to map of task arns to task infos
-func getLabelInfo(rpt report.Report) map[string]map[string]*taskInfo {
-	results := map[string]map[string]*taskInfo{}
+func getLabelInfo(rpt report.Report) map[string]map[string]*taskLabelInfo {
+	results := map[string]map[string]*taskLabelInfo{}
 	log.Debug("scanning for ECS containers")
 	for nodeID, node := range rpt.Container.Nodes {
 
@@ -39,13 +70,13 @@ func getLabelInfo(rpt report.Report) map[string]map[string]*taskInfo {
 
 		taskMap, ok := results[cluster]
 		if !ok {
-			taskMap = map[string]*taskInfo{}
+			taskMap = map[string]*taskLabelInfo{}
 			results[cluster] = taskMap
 		}
 
 		task, ok := taskMap[taskArn]
 		if !ok {
-			task = &taskInfo{containerIDs: []string{}, family: family}
+			task = &taskLabelInfo{containerIDs: []string{}, family: family}
 			taskMap[taskArn] = task
 		}
 
@@ -78,33 +109,37 @@ func (Reporter) Tag(rpt report.Report) (report.Report, error) {
 			taskArns = append(taskArns, taskArn)
 		}
 
-		taskServices, err := client.getTaskServices(taskArns)
+		ecsInfo, err := client.getInfo(taskArns)
 		if err != nil {
 			return rpt, err
 		}
 
 		// Create all the services first
-		unique := map[string]bool{}
-		for _, serviceName := range taskServices {
-			if !unique[serviceName] {
-				serviceID := report.MakeECSServiceNodeID(serviceName)
-				rpt.ECSService = rpt.ECSService.AddNode(report.MakeNode(serviceID))
-				unique[serviceName] = true
-			}
+		for serviceName, _ := range ecsInfo.services {
+			serviceID := report.MakeECSServiceNodeID(serviceName)
+			rpt.ECSService = rpt.ECSService.AddNode(report.MakeNode(serviceID))
+			// TODO add service metadata
 		}
-		log.Debugf("Created %v ECS service nodes", len(taskServices))
+		log.Debugf("Created %v ECS service nodes", len(services))
 
 		for taskArn, info := range taskMap {
+			_, ok := ecsInfo.tasks[taskArn] // TODO task instead of _
+			if !ok {
+				// can happen due to partial failures, just skip it
+				continue
+			}
 
 			// new task node
 			taskID := report.MakeECSTaskNodeID(taskArn)
-			node := report.MakeNodeWith(taskID, map[string]string{TaskFamily: info.family})
+			node := report.MakeNodeWith(taskID, map[string]string{
+				TaskFamily: info.family // TODO add task metadata
+			})
 			rpt.ECSTask = rpt.ECSTask.AddNode(node)
 
 			// parents sets to merge into all matching container nodes
 			parentsSets := report.MakeSets()
 			parentsSets = parentsSets.Add(report.ECSTask, report.MakeStringSet(taskID))
-			if serviceName, ok := taskServices[taskArn]; ok {
+			if serviceName, ok := ecsInfo.taskServiceMap[taskArn]; ok {
 				serviceID := report.MakeECSServiceNodeID(serviceName)
 				parentsSets = parentsSets.Add(report.ECSService, report.MakeStringSet(serviceID))
 			}
